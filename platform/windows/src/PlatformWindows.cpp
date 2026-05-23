@@ -55,11 +55,25 @@ public:
 
     bool Initialize() override {
         m_lib = LoadLibraryA("wintun.dll");
-        if (!m_lib) return false;
+        if (!m_lib) {
+            std::cerr << "CRITICAL: Could not find or load wintun.dll! Error: " << GetLastError() << std::endl;
+            std::cerr << "Ensure wintun.dll is in the same folder as the executable." << std::endl;
+            return false;
+        }
 
         auto create = (WintunCreateAdapter_t)GetProcAddress(m_lib, "WintunCreateAdapter");
+        if (!create) {
+             std::cerr << "CRITICAL: Wintun DLL is corrupt or incompatible." << std::endl;
+             return false;
+        }
+        
         m_adapter = create(m_name.c_str(), L"OptiFi", NULL);
-        return m_adapter != nullptr;
+        if (!m_adapter) {
+            std::cerr << "CRITICAL: Failed to create Wintun adapter. Error: " << GetLastError() << std::endl;
+            std::cerr << "Are you running as Administrator?" << std::endl;
+            return false;
+        }
+        return true;
     }
 
     bool StartSession(uint32_t bufferSize) override {
