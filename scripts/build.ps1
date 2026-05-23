@@ -35,8 +35,12 @@ if (-not (Test-Path "wintun.dll")) {
 
 # 5. Generate Build Files
 Write-Host ">>> Generating Build Files (Windows)..." -ForegroundColor Cyan
-# We use MinGW Makefiles as the hardware team's log shows they have 'make'
-cmake -G "MinGW Makefiles" ..
+# We remove the forced "MinGW Makefiles" and let CMake pick the best one (Ninja or Unix Makefiles)
+if (Get-Command "ninja" -ErrorAction SilentlyContinue) {
+    cmake -G "Ninja" ..
+} else {
+    cmake ..
+}
 
 # 6. Compile
 Write-Host ">>> Compiling Core Engine..." -ForegroundColor Cyan
