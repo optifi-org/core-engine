@@ -1,6 +1,17 @@
 # Unified Build & Auto-Dependency Script for Windows
 
-# 1. Create and enter build directory
+# 0. Prerequisite Check
+if (-not (Get-Command "cmake" -ErrorAction SilentlyContinue)) {
+    Write-Error "CRITICAL: 'cmake' not found! Please install CMake and add it to your PATH."
+    Write-Host "Tip: You can install it via winget: 'winget install kitware.cmake'" -ForegroundColor Yellow
+    return
+}
+
+# 1. Navigate to the core-engine root regardless of where it's called from
+$scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
+Set-Location "$scriptPath\.."
+
+# 2. Create and enter build directory
 if (-not (Test-Path "build")) {
     New-Item -ItemType Directory -Path "build"
 }

@@ -3,22 +3,23 @@
 # 1. Check for Administrator Privileges
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Error "CRITICAL: This script must be run as an Administrator to initialize the network driver."
-    return
+    Write-Warning "CRITICAL: This script should be run as an Administrator to initialize the network driver."
 }
 
-# 2. Navigate to core-engine root
+# 2. Setup Paths
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
-Set-Location "$scriptPath\.."
+$coreRoot = "$scriptPath\.."
+Set-Location $coreRoot
 
 # 3. Build the engine
 Write-Host ">>> Building OptiFi Core Engine..." -ForegroundColor Cyan
-& .\scripts\build.ps1
+& "$scriptPath\build.ps1"
 
 # 4. Run the Engine
-if (Test-Path ".\build\optifi-core-engine.exe") {
+$exePath = "$coreRoot\build\optifi-core-engine.exe"
+if (Test-Path $exePath) {
     Write-Host ">>> Starting Engine..." -ForegroundColor Green
-    .\build\optifi-core-engine.exe
+    & $exePath
 } else {
-    Write-Error "Build failed or executable not found."
+    Write-Error "Build failed or executable not found at $exePath"
 }
