@@ -3,7 +3,9 @@
 # 1. Check for Administrator Privileges
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Warning "CRITICAL: This script should be run as an Administrator to initialize the network driver."
+    Write-Error "CRITICAL: This script MUST be run as an Administrator to initialize the network driver."
+    Write-Host "Please restart your terminal (PowerShell) as Administrator and try again." -ForegroundColor Yellow
+    return
 }
 
 # 2. Setup Paths

@@ -47,4 +47,25 @@ if ($LASTEXITCODE -ne 0) {
     return
 }
 
+# 7. Deployment: Copy Runtime DLLs
+Write-Host ">>> Deploying Runtime Dependencies..." -ForegroundColor Cyan
+# Find where the compiler is to locate MinGW /bin folder
+$compilerPath = Get-Command "g++" | Select-Object -ExpandProperty Definition
+$mingwBin = Split-Path -Parent $compilerPath
+
+$dllsToCopy = @(
+    "libusb-1.0.dll",
+    "libgcc_s_seh-1.dll",
+    "libstdc++-6.dll",
+    "libwinpthread-1.dll"
+)
+
+foreach ($dll in $dllsToCopy) {
+    $src = "$mingwBin\$dll"
+    if (Test-Path $src) {
+        Copy-Item $src -Destination "." -Force
+        Write-Host "  -> Deployed $dll" -ForegroundColor Gray
+    }
+}
+
 Write-Host "[SUCCESS] Core Engine is built and ready." -ForegroundColor Green
