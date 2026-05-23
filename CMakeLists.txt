@@ -12,7 +12,7 @@ set(SOURCES
 )
 
 # --- Platform Detection ---
-if(WIN32 OR MINGW OR MSVC)
+if(WIN32 OR MINGW OR MSVC OR CMAKE_SYSTEM_NAME STREQUAL "Windows" OR MSYS)
     message(STATUS "[CONF] Target Platform: Windows")
     list(APPEND SOURCES platform/windows/src/PlatformWindows.cpp)
     add_definitions(-D_WIN32_WINNT=0x0600) # Target Windows Vista or higher

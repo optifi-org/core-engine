@@ -12,8 +12,7 @@ $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location "$scriptPath\.."
 
 # 2. HARD RESET: If any CMake artifacts exist, delete the entire build folder content.
-# This is necessary because some MSYS2 generators create persistent Makefiles that ignore platform logic.
-if (Test-Path "build\CMakeCache.txt" -or Test-Path "build\CMakeFiles") {
+if ((Test-Path "build\CMakeCache.txt") -or (Test-Path "build\CMakeFiles")) {
     Write-Host "[CLEAN] Hard resetting build directory to purge cross-platform artifacts..." -ForegroundColor Yellow
     Remove-Item -Path "build\*" -Recurse -Force
 }
