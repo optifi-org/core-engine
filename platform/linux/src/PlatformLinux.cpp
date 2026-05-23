@@ -15,6 +15,7 @@
 #include <cstring>
 
 #include "PlatformUtils.h"
+#include "UsbHardware.h"
 #include <csignal>
 #include <thread>
 #include <memory>
@@ -149,7 +150,14 @@ public:
 // --- FACTORIES ---
 std::unique_ptr<IAdapter> CreateAdapter(const std::string& name) { return std::make_unique<LinuxAdapter>(name); }
 std::unique_ptr<IIpcServer> CreateIpcServer(const std::string& path) { return std::make_unique<LinuxIpcServer>(path); }
-std::unique_ptr<IHardware> CreateHardware() { return std::make_unique<MockHardware>(); }
+std::unique_ptr<IHardware> CreateHardware() { 
+    auto usb = std::make_unique<hardware::UsbHardware>(0x303A, 0x4001, 0x01);
+    if (usb->Initialize()) {
+        return usb;
+    }
+    std::cout << "[HW] OptiFi hardware not found. Falling back to MockHardware." << std::endl;
+    return std::make_unique<MockHardware>(); 
+}
 
 } // namespace core
 } // namespace optifi

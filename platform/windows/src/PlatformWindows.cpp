@@ -2,6 +2,7 @@
 #include "IIpcServer.h"
 #include "IHardware.h"
 #include "PlatformUtils.h"
+#include "UsbHardware.h"
 #include <windows.h>
 #include <iostream>
 #include <vector>
@@ -151,6 +152,11 @@ private:
 std::unique_ptr<IAdapter> CreateAdapter(const std::string& name) { return std::make_unique<WindowsAdapter>(name); }
 std::unique_ptr<IIpcServer> CreateIpcServer(const std::string& path) { return std::make_unique<WindowsIpcServer>(path); }
 std::unique_ptr<IHardware> CreateHardware() { 
+    auto usb = std::make_unique<hardware::UsbHardware>(0x303A, 0x4001, 0x01);
+    if (usb->Initialize()) {
+        return usb;
+    }
+    std::cout << "[HW] OptiFi hardware not found. Falling back to MockHardware." << std::endl;
     class MockHardware : public IHardware {
     public:
         bool Initialize() override { return true; }
