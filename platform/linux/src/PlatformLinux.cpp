@@ -146,6 +146,7 @@ class MockHardware : public IHardware {
 public:
     bool Initialize() override { std::cout << "[HW] Mock Init" << std::endl; return true; }
     void SendPacket(const uint8_t*, uint32_t) override {}
+    int ReadPacket(uint8_t*, uint32_t) override { return 0; }
     void Disconnect() override { std::cout << "[HW] Mock Exit" << std::endl; }
 };
 
@@ -153,7 +154,7 @@ public:
 std::unique_ptr<IAdapter> CreateAdapter(const std::string& name) { return std::make_unique<LinuxAdapter>(name); }
 std::unique_ptr<IIpcServer> CreateIpcServer(const std::string& path) { return std::make_unique<LinuxIpcServer>(path); }
 std::unique_ptr<IHardware> CreateHardware() { 
-    auto usb = std::make_unique<hardware::UsbHardware>(0x303A, 0x4001, 0x01);
+    auto usb = std::make_unique<hardware::UsbHardware>(0x303A, 0x4001, 0x01, 0x81);
     if (usb->Initialize()) {
         return usb;
     }

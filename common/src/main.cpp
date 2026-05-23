@@ -48,16 +48,20 @@ int main() {
 
     std::cout << "Core Engine Online." << std::endl;
 
+    uint8_t hwBuffer[2048];
+
     while (g_Running) {
+        // --- 1. HANDLE PACKETS FROM OS ---
         uint32_t packetSize = 0;
         uint8_t* rawPacket = adapter->ReadPacket(&packetSize);
 
         if (rawPacket) {
             profiler.StartPacketTrace();
 
-            // Processing logic...
+            // Intercept and send to Hardware
             hardware->SendPacket(rawPacket, packetSize);
 
+            // Handle Local Ping Bounce (Internal Logic)
             if (processor.IsIcmpEchoRequest(rawPacket, packetSize)) {
                 auto reply = processor.CreateIcmpReply(rawPacket, packetSize);
                 adapter->SendPacket(reply.data(), packetSize);
@@ -66,6 +70,18 @@ int main() {
             adapter->ReleasePacket(rawPacket);
             profiler.EndPacketTrace(packetSize);
             ipcServer->BroadcastTelemetry(profiler.GetLastPacketMetrics().processingTimeMicroseconds, packetSize);
+        }
+
+        // --- 2. HANDLE PACKETS FROM HARDWARE (Return Path) ---
+        int hwRead = hardware->ReadPacket(hwBuffer, sizeof(hwBuffer));
+        if (hwRead > 0) {
+            std::cout << "[HW] Received " << hwRead << " bytes from ESP32. Injecting back to OS..." << std::endl;
+            adapter->SendPacket(hwBuffer, static_cast<uint32_t>(hwRead));
+        }
+
+        // Small sleep if no traffic to prevent 100% CPU usage
+        if (!rawPacket && hwRead <= 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
 

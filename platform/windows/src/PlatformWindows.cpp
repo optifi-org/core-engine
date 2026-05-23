@@ -167,7 +167,7 @@ private:
 std::unique_ptr<IAdapter> CreateAdapter(const std::string& name) { return std::make_unique<WindowsAdapter>(name); }
 std::unique_ptr<IIpcServer> CreateIpcServer(const std::string& path) { return std::make_unique<WindowsIpcServer>(path); }
 std::unique_ptr<IHardware> CreateHardware() { 
-    auto usb = std::make_unique<hardware::UsbHardware>(0x303A, 0x4001, 0x01);
+    auto usb = std::make_unique<hardware::UsbHardware>(0x303A, 0x4001, 0x01, 0x81);
     if (usb->Initialize()) {
         return usb;
     }
@@ -176,6 +176,7 @@ std::unique_ptr<IHardware> CreateHardware() {
     public:
         bool Initialize() override { return true; }
         void SendPacket(const uint8_t*, uint32_t) override {}
+        int ReadPacket(uint8_t*, uint32_t) override { return 0; }
         void Disconnect() override {}
     };
     return std::make_unique<MockHardware>(); 

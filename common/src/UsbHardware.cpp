@@ -5,8 +5,8 @@
 namespace optifi {
 namespace hardware {
 
-UsbHardware::UsbHardware(uint16_t vid, uint16_t pid, uint8_t endpoint)
-    : m_vid(vid), m_pid(pid), m_endpoint(endpoint), m_ctx(nullptr), m_handle(nullptr) {
+UsbHardware::UsbHardware(uint16_t vid, uint16_t pid, uint8_t outEndpoint, uint8_t inEndpoint)
+    : m_vid(vid), m_pid(pid), m_outEndpoint(outEndpoint), m_inEndpoint(inEndpoint), m_ctx(nullptr), m_handle(nullptr) {
 }
 
 UsbHardware::~UsbHardware() {
@@ -22,7 +22,6 @@ bool UsbHardware::Initialize() {
 
     m_handle = libusb_open_device_with_vid_pid(m_ctx, m_vid, m_pid);
     if (!m_handle) {
-        // Don't print error here, as we might fallback to MockHardware silently
         return false;
     }
 
@@ -47,9 +46,26 @@ void UsbHardware::SendPacket(const uint8_t* data, uint32_t size) {
     if (!m_handle) return;
 
     int transferred = 0;
-    int res = libusb_bulk_transfer(m_handle, m_endpoint, const_cast<uint8_t*>(data), size, &transferred, 1000);
+    int res = libusb_bulk_transfer(m_handle, m_outEndpoint, const_cast<uint8_t*>(data), size, &transferred, 1000);
     if (res < 0) {
-        std::cerr << "[USB] Transfer failed: " << libusb_error_name(res) << std::endl;
+        std::cerr << "[USB] Send failed: " << libusb_error_name(res) << std::endl;
+    }
+}
+
+int UsbHardware::ReadPacket(uint8_t* buffer, uint32_t maxSize) {
+    if (!m_handle) return -1;
+
+    int transferred = 0;
+    // We use a very short timeout (1ms) to make it essentially non-blocking
+    int res = libusb_bulk_transfer(m_handle, m_inEndpoint, buffer, maxSize, &transferred, 1);
+    
+    if (res == LIBUSB_SUCCESS) {
+        return transferred;
+    } else if (res == LIBUSB_ERROR_TIMEOUT) {
+        return 0; // No data available right now
+    } else {
+        std::cerr << "[USB] Read failed: " << libusb_error_name(res) << std::endl;
+        return -1;
     }
 }
 
