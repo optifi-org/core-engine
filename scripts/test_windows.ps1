@@ -1,7 +1,7 @@
 # Automated Windows Test Script (Run as Administrator)
 
 # 1. Build
-./scripts/build.sh
+& .\scripts\build.ps1
 Set-Location build
 
 # 2. Start Engine in background

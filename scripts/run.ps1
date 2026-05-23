@@ -13,8 +13,7 @@ Set-Location "$scriptPath\.."
 
 # 3. Build the engine
 Write-Host ">>> Building OptiFi Core Engine..." -ForegroundColor Cyan
-# We call the existing build logic
-bash ./scripts/build.sh
+& .\scripts\build.ps1
 
 # 4. Run the Engine
 if (Test-Path ".\build\optifi-core-engine.exe") {
