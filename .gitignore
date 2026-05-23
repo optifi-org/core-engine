@@ -1,0 +1,20 @@
+# Build artifacts
+build/
+bin/
+out/
+
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+*.o
+*.obj
+*.a
+*.lib
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
