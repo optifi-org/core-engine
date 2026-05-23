@@ -137,6 +137,7 @@ public:
                             std::string cmd(buf);
                             if (cmd.find("SET_BATTERY") != std::string::npos) m_preset = DriverPreset::BATTERY;
                             else if (cmd.find("SET_PERFORMANCE") != std::string::npos) m_preset = DriverPreset::PERFORMANCE;
+                            else if (cmd.find("SET_BALANCED") != std::string::npos) m_preset = DriverPreset::BALANCED;
                         } else break;
                     }
                 }
