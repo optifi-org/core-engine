@@ -7,42 +7,44 @@ if (-not (Get-Command "cmake" -ErrorAction SilentlyContinue)) {
     return
 }
 
-# 1. Navigate to the core-engine root regardless of where it's called from
+# 1. Navigate to the core-engine root
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location "$scriptPath\.."
 
-# 2. Create and enter build directory
+# 2. CLEANUP: If build directory exists but is poisoned (e.g. from Linux), clear it.
+if (Test-Path "build\CMakeCache.txt") {
+    Write-Host "[CLEAN] Detected existing CMake cache. Clearing it to prevent cross-platform poisoning..." -ForegroundColor Yellow
+    Remove-Item -Path "build\*" -Recurse -Force
+}
+
+# 3. Create build directory
 if (-not (Test-Path "build")) {
     New-Item -ItemType Directory -Path "build"
 }
 Set-Location "build"
 
-# 2. Platform-specific dependency fetching (Wintun)
+# 4. Platform-specific dependency fetching (Wintun)
 if (-not (Test-Path "wintun.dll")) {
-    Write-Host "[SETUP] wintun.dll missing. Downloading from official source..." -ForegroundColor Cyan
-    
+    Write-Host "[SETUP] wintun.dll missing. Downloading..." -ForegroundColor Cyan
     $url = "https://www.wintun.net/builds/wintun-0.14.1.zip"
-    $zipPath = "wintun.zip"
-    
-    Invoke-WebRequest -Uri $url -OutFile $zipPath
-    
-    # Extract only the amd64 dll
-    Expand-Archive -Path $zipPath -DestinationPath "temp_wintun" -Force
+    Invoke-WebRequest -Uri $url -OutFile "wintun.zip"
+    Expand-Archive -Path "wintun.zip" -DestinationPath "temp_wintun" -Force
     Move-Item -Path "temp_wintun\wintun\bin\amd64\wintun.dll" -Destination "." -Force
-    
-    # Cleanup
-    Remove-Item -Path $zipPath -Force
-    Remove-Item -Path "temp_wintun" -Recurse -Force
-    
-    Write-Host "  -> wintun.dll downloaded and deployed." -ForegroundColor Green
+    Remove-Item -Path "wintun.zip", "temp_wintun" -Recurse -Force
 }
 
-# 3. Generate Build Files (Using MinGW Makefiles)
-Write-Host ">>> Generating Build Files..." -ForegroundColor Cyan
+# 5. Generate Build Files
+Write-Host ">>> Generating Build Files (Windows)..." -ForegroundColor Cyan
+# We use MinGW Makefiles as the hardware team's log shows they have 'make'
 cmake -G "MinGW Makefiles" ..
 
-# 4. Compile
+# 6. Compile
 Write-Host ">>> Compiling Core Engine..." -ForegroundColor Cyan
 cmake --build . --parallel $env:NUMBER_OF_PROCESSORS
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Build failed during compilation."
+    return
+}
 
 Write-Host "[SUCCESS] Core Engine is built and ready." -ForegroundColor Green
