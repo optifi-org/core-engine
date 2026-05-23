@@ -11,13 +11,14 @@ if (-not (Get-Command "cmake" -ErrorAction SilentlyContinue)) {
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location "$scriptPath\.."
 
-# 2. CLEANUP: If build directory exists but is poisoned (e.g. from Linux), clear it.
-if (Test-Path "build\CMakeCache.txt") {
-    Write-Host "[CLEAN] Detected existing CMake cache. Clearing it to prevent cross-platform poisoning..." -ForegroundColor Yellow
+# 2. HARD RESET: If any CMake artifacts exist, delete the entire build folder content.
+# This is necessary because some MSYS2 generators create persistent Makefiles that ignore platform logic.
+if (Test-Path "build\CMakeCache.txt" -or Test-Path "build\CMakeFiles") {
+    Write-Host "[CLEAN] Hard resetting build directory to purge cross-platform artifacts..." -ForegroundColor Yellow
     Remove-Item -Path "build\*" -Recurse -Force
 }
 
-# 3. Create build directory
+# 3. Create/Ensure build directory exists
 if (-not (Test-Path "build")) {
     New-Item -ItemType Directory -Path "build"
 }

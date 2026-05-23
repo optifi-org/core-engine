@@ -1,3 +1,5 @@
+#ifndef _WIN32
+
 #include "IAdapter.h"
 #include "IIpcServer.h"
 #include "IHardware.h"
@@ -161,3 +163,5 @@ std::unique_ptr<IHardware> CreateHardware() {
 
 } // namespace core
 } // namespace optifi
+
+#endif // _WIN32
