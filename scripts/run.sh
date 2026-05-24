@@ -16,5 +16,7 @@ if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" || "$OSTYPE" == "cygwin" ]]; t
     ./build/optifi-core-engine.exe
 else
     echo ">>> Detected Linux. Starting Engine (Requires sudo)..."
+    echo ">>> Ensuring 8.8.8.8 is routed through ESP32 on optifi0..."
+    sudo ip route replace 8.8.8.8/32 via 10.137.137.2 dev optifi0 onlink 2>/dev/null || true
     sudo ./build/optifi-core-engine
 fi

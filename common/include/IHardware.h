@@ -15,8 +15,9 @@ public:
      * @return Number of bytes read, or 0 if no data, or -1 on error.
      */
     virtual int ReadPacket(uint8_t* buffer, uint32_t maxSize) = 0;
-
+    virtual bool IsConnected() const = 0;
     virtual void Disconnect() = 0;
+
 };
 
 } // namespace core
