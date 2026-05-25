@@ -193,8 +193,8 @@ public:
     bool BroadcastTelemetry(uint64_t cpu, size_t sz) override {
         int cli = m_clientFd.load();
         if (cli < 0) return false;
-        std::string p = "TELEMETRY|" + std::to_string(sz) + "|" + std::to_string(cpu) + "\n";
-        return write(cli, p.c_str(), p.length()) > 0;
+        std::string data = "TELEMETRY|" + std::to_string(sz) + "|" + std::to_string(cpu) + "\n";
+        return send(cli, data.c_str(), data.length(), MSG_NOSIGNAL) > 0;
     }
     bool BroadcastMessage(const std::string& msg) override {
         int cli = m_clientFd.load();

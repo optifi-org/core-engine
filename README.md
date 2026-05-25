@@ -1,47 +1,36 @@
 # OptiFi Core Engine
 
-The OptiFi Core Engine is a high-performance C++ system daemon that bridges local host network traffic over USB to the ESP32 hardware node. It provisions a virtual Linux network adapter (TAP interface), manages a credit-based USB bulk-transfer flow control system, and acts as an IPC server to broadcast live telemetry to the OptiFi Frontend dashboard.
+The OptiFi Core Engine is a high-performance C++ system daemon that bridges local host network traffic over USB to the ESP32 hardware node. 
 
-## Prerequisites & System Requirements
+## 📚 OS-Specific Build Guides
+To compile and run the Core Engine daemon, please refer to the specific setup instructions for your operating system:
+- [Ubuntu / Debian](docs/UBUNTU.md)
+- [Arch Linux](docs/ARCH.md)
+- [Windows](docs/WINDOWS.md)
 
-The Core Engine interacts directly with the Linux kernel's networking stack to create TAP devices, and interfaces with the USB hardware via `libusb`.
+---
 
-### 1. General Requirements
-* **OS:** Linux (Windows support is experimental/stubbed)
-* **Compiler:** GCC or Clang (C++17 support required)
-* **Build System:** CMake (v3.10 or higher) and Make
-* **Permissions:** Root / `sudo` access is mandatory when running the engine to allow the configuration of the `/dev/net/tun` network interface.
+## 🏗️ Architectural Overview & Modules
 
-### 2. Linux-Specific Dependencies
-You must install the necessary C++ build tools and networking utilities required for the network bridge setup.
+The Core Engine is built to bypass standard network bottlenecks, using `libusb` and the Linux kernel's Universal TUN/TAP driver to push hardware-accelerated traffic.
 
-**Dependency Installation (Debian/Ubuntu):**
-```bash
-# Update package lists
-sudo apt update
+### 1. The Bridge Loop (`common/src/main.cpp`)
+**Why it was implemented:** We need a main event loop that continuously polls the virtual network interface and the USB hardware to shuttle packets synchronously.
+**Signatures & Logic:**
+- Uses standard POSIX `read()` and `write()` calls to interact with the Linux `optifi0` TAP interface.
+- **Framing Protocol:** When pushing data from USB to the TAP interface, it parses the custom byte-level framing protocol (`'O'`, `'P'`, `'T'`, `'I'`, followed by a length header) to guarantee packet integrity across USB batch boundaries.
+- **IPC Telemetry Server:** Provisions a Unix Domain Socket at `/tmp/optifi.sock`. It formats live bridge statistics into pipe-delimited strings (e.g., `BRIDGE_STATS|tx_bytes|rx_bytes|credits`) and broadcasts them to any connected GUI clients.
 
-# Install build tools, libusb, and networking utilities
-sudo apt install build-essential cmake pkg-config libusb-1.0-0-dev iproute2 ethtool
-```
-*Note: `iproute2` provides the `ip` command, and `ethtool` is used to disable checksum offloading on the virtual TAP adapter.*
+### 2. Linux Platform Module (`platform/linux/src/PlatformLinux.cpp`)
+**Why it was implemented:** Direct manipulation of the OS network stack is platform-specific. This file isolates Linux kernel-level operations.
+**Signatures & Logic:**
+- `PlatformLinux::CreateTapDevice(...)`: Interfaces with `/dev/net/tun` via `ioctl(fd, TUNSETIFF, ...)` to spawn a raw Layer-2 Ethernet TAP device named `optifi0`.
+- Issues `ifconfig` (or `ip link`) commands dynamically to set the MAC address to `02:00:00:13:37:00` and bring the interface UP.
 
-## Installation & Setup
-
-1. **Build the Engine:**
-   You can compile the daemon using the provided build script:
-   ```bash
-   ./scripts/build.sh
-   ```
-   *Alternatively, you can build manually using CMake:*
-   ```bash
-   mkdir -p build && cd build
-   cmake ..
-   make
-   ```
-
-2. **Run the Engine:**
-   Because the engine provisions the `optifi0` network interface and manipulates routing tables, it **must** be run with root privileges.
-   ```bash
-   sudo ./scripts/run.sh
-   ```
-   > **Note:** Once running, the engine will establish a Unix socket (`/tmp/optifi.sock`) to securely communicate live bridging statistics and telemetry with the frontend UI.
+### 3. USB Hardware Integrator (`common/src/UsbHardware.cpp`)
+**Why it was implemented:** To talk directly to the TinyUSB vendor endpoints on the ESP32 without relying on slow OS-level CDC/serial drivers.
+**Signatures & Logic:**
+- Interfaces with `libusb-1.0`.
+- `UsbHardware::SendPacket(...)`: Dispatches data to the `0x01` Bulk OUT endpoint.
+- `UsbHardware::Poll(...)`: Actively drains the `0x81` Bulk IN endpoint.
+- **Burst Batching Optimization:** It aggressively loops up to 20 times per poll cycle, draining massive multi-megabit bursts from the USB FIFO instantly, completely eliminating software-induced bottlenecks and achieving esports-level ping times.

@@ -78,7 +78,7 @@ int UsbHardware::ReadPacket(uint8_t* buffer, uint32_t maxSize) {
     if (res == LIBUSB_SUCCESS) {
         return transferred;
     } else if (res == LIBUSB_ERROR_TIMEOUT) {
-        return 0; // Normal timeout
+        return transferred > 0 ? transferred : 0;
     } else {
         // Only log serious errors, ignore timeouts
         std::cerr << "[USB] READ ERROR: " << libusb_error_name(res) << std::endl;

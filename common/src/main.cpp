@@ -26,9 +26,8 @@ std::atomic<bool> g_Running(true);
 
 namespace {
 constexpr uint8_t OPTIFI_PKT_DATA = 0x00;
-constexpr uint8_t OPTIFI_PKT_CREDIT = 0x03;
-constexpr int32_t kMaxCredits = 32;
-constexpr size_t kOptifiHeaderSize = 3;
+constexpr uint8_t OPTIFI_PKT_CONTROL = 0x01;
+constexpr size_t kOptifiHeaderSize = 7;
 }
 
 int main() {
@@ -74,17 +73,14 @@ int main() {
     uint64_t packetsIn = 0;
     time_t lastLogTime = time(nullptr);
     
-    // --- STATIC WINDOW (CREDIT-BASED FLOW CONTROL) ---
-    // Start with 32 credits (matching ESP32's usb_rx_queue size)
-    std::atomic<int32_t> credits(kMaxCredits);
-
+    // --- MAIN LOOP ---
     while (g_Running) {
         time_t now = time(nullptr);
 
         // Periodic logging of stats
         if (now - lastLogTime >= 1) {
-            std::cout << "[CORE STATS] TX: " << packetsOut << " packets | RX: " << packetsIn << " packets | CREDITS: " << credits.load() << std::endl;
-            ipcServer->BroadcastMessage("BRIDGE_STATS|" + std::to_string(packetsOut) + "|" + std::to_string(packetsIn) + "|" + std::to_string(credits.load()));
+            std::cout << "[CORE STATS] TX: " << packetsOut << " packets | RX: " << packetsIn << " packets" << std::endl;
+            ipcServer->BroadcastMessage("BRIDGE_STATS|" + std::to_string(packetsOut) + "|" + std::to_string(packetsIn) + "|32");
             lastLogTime = now;
         }
 
@@ -97,19 +93,27 @@ int main() {
         }
 
         auto currentPreset = ipcServer->GetCurrentPreset();
-        int sleepUs = (currentPreset == optifi::core::DriverPreset::PERFORMANCE) ? 0 : 100;
+        if (currentPreset != lastPreset) {
+            uint8_t ctrlBuf[7] = { 'O', 'P', 'T', 'I', OPTIFI_PKT_CONTROL, 0x12 /* OPTIFI_CTRL_SET_MODE */, static_cast<uint8_t>(currentPreset) };
+            hardware->SendPacket(ctrlBuf, sizeof(ctrlBuf));
+            std::cout << "[CORE] Sent Power Mode Control Packet: " << static_cast<int>(currentPreset) << std::endl;
+            lastPreset = currentPreset;
+        }
+
+        int sleepUs = (currentPreset == optifi::core::DriverPreset::PERFORMANCE) ? 0 : 
+                      (currentPreset == optifi::core::DriverPreset::BATTERY) ? 1000 : 100;
 
         // --- 1. HANDLE PACKETS FROM OS (TUN -> USB) ---
         uint32_t packetSize = 0;
         uint8_t* rawPacket = nullptr;
+        bool hasOsPacket = false;
         
-        if (credits.load() > 0) {
+        for (int osReadCount = 0; osReadCount < 20; osReadCount++) {
             rawPacket = adapter->ReadPacket(&packetSize);
             if (rawPacket && packetSize >= 14) {
+                hasOsPacket = true;
                 // Sniff EVERYTHING for deep diagnostics
-                std::cout << "[TAP >> USB] ";
-                for(int i=0; i<14; i++) std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)rawPacket[i] << " ";
-                std::cout << std::dec << " (" << packetSize << " bytes)" << std::endl;
+                // std::cout << "[TAP >> USB] " << packetSize << " bytes" << std::endl;
 
                 if (packetSize + kOptifiHeaderSize > sizeof(usbTransferBuf)) {
                     std::cerr << "[TAP >> USB] Dropping oversize packet: " << packetSize << " bytes" << std::endl;
@@ -117,62 +121,63 @@ int main() {
                     continue;
                 }
 
-                usbTransferBuf[0] = OPTIFI_PKT_DATA;
-                usbTransferBuf[1] = (uint8_t)(packetSize & 0xFF);
-                usbTransferBuf[2] = (uint8_t)((packetSize >> 8) & 0xFF);
-                memcpy(&usbTransferBuf[3], rawPacket, packetSize);
+                usbTransferBuf[0] = 'O';
+                usbTransferBuf[1] = 'P';
+                usbTransferBuf[2] = 'T';
+                usbTransferBuf[3] = 'I';
+                usbTransferBuf[4] = OPTIFI_PKT_DATA;
+                usbTransferBuf[5] = (uint8_t)(packetSize & 0xFF);
+                usbTransferBuf[6] = (uint8_t)((packetSize >> 8) & 0xFF);
+                memcpy(&usbTransferBuf[7], rawPacket, packetSize);
                 
-                hardware->SendPacket(usbTransferBuf, packetSize + 3);
+                hardware->SendPacket(usbTransferBuf, packetSize + 7);
                 packetsOut++;
-                credits--; 
-                ipcServer->BroadcastTelemetry(50, packetSize); // 50us dummy processing time for telemetry graph
+                ipcServer->BroadcastTelemetry(50, packetSize); // dummy processing time
                 adapter->ReleasePacket(rawPacket);
+            } else {
+                break;
             }
         }
 
         // --- 2. HANDLE PACKETS FROM HARDWARE (USB -> TAP) ---
-        enum class RxState { TYPE, LEN_LO, LEN_HI, PAYLOAD };
-        static RxState rxState = RxState::TYPE;
+        enum class RxState { M0, M1, M2, M3, TYPE, LEN_LO, LEN_HI, PAYLOAD };
+        static RxState rxState = RxState::M0;
         static uint8_t reassemblyBuffer[2048];
         static uint16_t expectedRxLen = 0;
         static uint16_t currentRxLen = 0;
+        static uint8_t pendingType = 0;
+        bool hasUsbPacket = false;
 
         int readLimit = 20;
         for (int i = 0; i < readLimit; i++) {
             int hwRead = hardware->ReadPacket(hwBuffer, sizeof(hwBuffer));
             if (hwRead > 0) {
+                hasUsbPacket = true;
                 uint8_t *ptr = hwBuffer;
                 int remaining = hwRead;
 
                 while (remaining > 0) {
                     switch (rxState) {
+                    case RxState::M0: if (*ptr == 'O') rxState = RxState::M1; ptr++; remaining--; break;
+                    case RxState::M1: rxState = (*ptr == 'P') ? RxState::M2 : RxState::M0; ptr++; remaining--; break;
+                    case RxState::M2: rxState = (*ptr == 'T') ? RxState::M3 : RxState::M0; ptr++; remaining--; break;
+                    case RxState::M3: rxState = (*ptr == 'I') ? RxState::TYPE : RxState::M0; ptr++; remaining--; break;
                     case RxState::TYPE:
-                        if (*ptr == OPTIFI_PKT_DATA) {
-                            expectedRxLen = 0;
-                            currentRxLen = 0;
-                            rxState = RxState::LEN_LO;
-                        } else if (*ptr == OPTIFI_PKT_CREDIT) {
-                            int32_t current = credits.load();
-                            while (current < kMaxCredits && !credits.compare_exchange_weak(current, current + 1)) {}
-                        }
-                        ptr++;
-                        remaining--;
+                        pendingType = *ptr;
+                        rxState = RxState::LEN_LO;
+                        ptr++; remaining--;
                         break;
                     case RxState::LEN_LO:
                         expectedRxLen = *ptr;
-                        ptr++;
-                        remaining--;
+                        ptr++; remaining--;
                         rxState = RxState::LEN_HI;
                         break;
                     case RxState::LEN_HI:
                         expectedRxLen |= static_cast<uint16_t>(*ptr) << 8;
-                        ptr++;
-                        remaining--;
+                        ptr++; remaining--;
                         if (expectedRxLen == 0 || expectedRxLen > sizeof(reassemblyBuffer)) {
                             std::cerr << "[USB >> TAP] Dropping invalid frame length: " << expectedRxLen << std::endl;
-                            expectedRxLen = 0;
-                            currentRxLen = 0;
-                            rxState = RxState::TYPE;
+                            expectedRxLen = 0; currentRxLen = 0; rxState = RxState::M0;
                         } else {
                             rxState = RxState::PAYLOAD;
                         }
@@ -186,18 +191,12 @@ int main() {
                         remaining -= toCopy;
 
                         if (currentRxLen >= expectedRxLen) {
-                            adapter->SendPacket(reassemblyBuffer, expectedRxLen);
-                            packetsIn++;
-                            ipcServer->BroadcastTelemetry(50, expectedRxLen);
-                            
-                            std::cout << "[USB >> TAP] Packet received (" << expectedRxLen << " bytes): ";
-                            for(int i=0; i<14 && i<expectedRxLen; i++) 
-                                std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)reassemblyBuffer[i] << " ";
-                            std::cout << std::dec << std::endl;
-
-                            expectedRxLen = 0;
-                            currentRxLen = 0;
-                            rxState = RxState::TYPE;
+                            if (pendingType == OPTIFI_PKT_DATA) {
+                                adapter->SendPacket(reassemblyBuffer, expectedRxLen);
+                                packetsIn++;
+                                ipcServer->BroadcastTelemetry(50, expectedRxLen);
+                            }
+                            expectedRxLen = 0; currentRxLen = 0; rxState = RxState::M0;
                         }
                         break;
                     }
@@ -206,7 +205,7 @@ int main() {
             } else break;
         }
 
-        if (!rawPacket && sleepUs > 0) {
+        if (!hasOsPacket && !hasUsbPacket && sleepUs > 0) {
             std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
         }
     }
