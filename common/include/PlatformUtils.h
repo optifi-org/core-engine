@@ -2,6 +2,8 @@
 #include <functional>
 #include <string>
 
+struct libusb_device_handle;
+
 namespace optifi {
 namespace core {
 
@@ -19,6 +21,9 @@ public:
 
     // Returns configuration specific to the running OS
     static PlatformConfig GetDefaultConfig();
+
+    // Configures USB device hooks for the running OS
+    static void ConfigureUsbDevice(struct libusb_device_handle* handle);
 };
 
 } // namespace core

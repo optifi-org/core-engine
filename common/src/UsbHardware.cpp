@@ -1,4 +1,5 @@
 #include "UsbHardware.h"
+#include "PlatformUtils.h"
 #include <iostream>
 #include <cstring>
 #include <mutex>
@@ -30,15 +31,7 @@ bool UsbHardware::Initialize() {
         return false;
     }
 
-#ifdef _WIN32
-    std::cout << "[USB] Device opened. Skipping reset/auto-detach on Windows." << std::endl;
-#else
-    std::cout << "[USB] Device opened. Resetting..." << std::endl;
-    libusb_reset_device(m_handle);
-
-    std::cout << "[USB] Setting auto-detach-kernel-driver..." << std::endl;
-    libusb_set_auto_detach_kernel_driver(m_handle, 1);
-#endif
+    optifi::core::PlatformUtils::ConfigureUsbDevice(m_handle);
 
     std::cout << "[USB] Claiming interface 0 (Vendor Data)..." << std::endl;
     int res = libusb_claim_interface(m_handle, 0);

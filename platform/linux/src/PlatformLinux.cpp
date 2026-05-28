@@ -43,6 +43,13 @@ PlatformConfig PlatformUtils::GetDefaultConfig() {
     return {"/tmp/optifi.sock", "optifi0", "10.137.137.1", "255.255.255.0"};
 }
 
+void PlatformUtils::ConfigureUsbDevice(struct libusb_device_handle* handle) {
+    std::cout << "[USB] Device opened. Resetting..." << std::endl;
+    libusb_reset_device(handle);
+    std::cout << "[USB] Setting auto-detach-kernel-driver..." << std::endl;
+    libusb_set_auto_detach_kernel_driver(handle, 1);
+}
+
 // --- LINUX ADAPTER ---
 class LinuxAdapter : public IAdapter {
 public:

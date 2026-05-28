@@ -79,6 +79,11 @@ PlatformConfig PlatformUtils::GetDefaultConfig() {
     return {"\\\\.\\pipe\\OptiFiCommandPipe", "OptiFi", "10.137.137.1", "255.255.255.0"};
 }
 
+void PlatformUtils::ConfigureUsbDevice(struct libusb_device_handle* handle) {
+    (void)handle;
+    std::cout << "[USB] Device opened. Skipping reset/auto-detach on Windows." << std::endl;
+}
+
 // --- WINDOWS ADAPTER (REAL WINTUN) ---
 class WindowsAdapter : public IAdapter {
 public:
