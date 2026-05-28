@@ -23,11 +23,25 @@ namespace core {
 }
 
 std::atomic<bool> g_Running(true);
+std::atomic<int> g_DebugStage(0);
 
 namespace {
 constexpr uint8_t OPTIFI_PKT_DATA = 0x00;
 constexpr uint8_t OPTIFI_PKT_CONTROL = 0x01;
 constexpr size_t kOptifiHeaderSize = 7;
+
+const char* StageName(int stage) {
+    switch (stage) {
+    case 0: return "startup";
+    case 1: return "loop-top";
+    case 2: return "adapter-read";
+    case 3: return "usb-send";
+    case 4: return "usb-read";
+    case 5: return "ipc-write";
+    case 6: return "sleep";
+    default: return "unknown";
+    }
+}
 }
 
 int main() {
@@ -64,6 +78,13 @@ int main() {
 
     std::cout << "--- Core Engine Online and Polling ---" << std::endl;
 
+    std::thread watchdog([]() {
+        while (g_Running) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            std::cout << "[WATCHDOG] stage=" << StageName(g_DebugStage.load()) << std::endl;
+        }
+    });
+
     uint8_t hwBuffer[4096];
     uint8_t usbTransferBuf[4096];
     optifi::core::DriverPreset lastPreset = ipcServer->GetCurrentPreset();
@@ -72,14 +93,21 @@ int main() {
     uint64_t packetsOut = 0;
     uint64_t packetsIn = 0;
     time_t lastLogTime = time(nullptr);
+    int debugLoopCount = 0;
     
     // --- MAIN LOOP ---
     while (g_Running) {
+        g_DebugStage = 1;
         time_t now = time(nullptr);
+        bool debugLoop = debugLoopCount < 5;
+        if (debugLoop) {
+            std::cout << "[LOOP] tick " << debugLoopCount << std::endl;
+        }
 
         // Periodic logging of stats
         if (now - lastLogTime >= 1) {
             std::cout << "[CORE STATS] TX: " << packetsOut << " packets | RX: " << packetsIn << " packets" << std::endl;
+            g_DebugStage = 5;
             ipcServer->BroadcastMessage("BRIDGE_STATS|" + std::to_string(packetsOut) + "|" + std::to_string(packetsIn) + "|32");
             lastLogTime = now;
         }
@@ -108,7 +136,11 @@ int main() {
         uint8_t* rawPacket = nullptr;
         bool hasOsPacket = false;
         
+        if (debugLoop) {
+            std::cout << "[LOOP] reading adapter" << std::endl;
+        }
         for (int osReadCount = 0; osReadCount < 20; osReadCount++) {
+            g_DebugStage = 2;
             rawPacket = adapter->ReadPacket(&packetSize);
             if (rawPacket && packetSize >= 14) {
                 hasOsPacket = true;
@@ -130,13 +162,18 @@ int main() {
                 usbTransferBuf[6] = (uint8_t)((packetSize >> 8) & 0xFF);
                 memcpy(&usbTransferBuf[7], rawPacket, packetSize);
                 
-                hardware->SendPacket(usbTransferBuf, packetSize + 7);
                 packetsOut++;
+                g_DebugStage = 5;
                 ipcServer->BroadcastTelemetry(50, packetSize); // dummy processing time
+                g_DebugStage = 3;
+                hardware->SendPacket(usbTransferBuf, packetSize + 7);
                 adapter->ReleasePacket(rawPacket);
             } else {
                 break;
             }
+        }
+        if (debugLoop) {
+            std::cout << "[LOOP] adapter done" << std::endl;
         }
 
         // --- 2. HANDLE PACKETS FROM HARDWARE (USB -> TAP) ---
@@ -149,7 +186,11 @@ int main() {
         bool hasUsbPacket = false;
 
         int readLimit = 20;
+        if (debugLoop) {
+            std::cout << "[LOOP] reading usb" << std::endl;
+        }
         for (int i = 0; i < readLimit; i++) {
+            g_DebugStage = 4;
             int hwRead = hardware->ReadPacket(hwBuffer, sizeof(hwBuffer));
             if (hwRead > 0) {
                 hasUsbPacket = true;
@@ -206,12 +247,18 @@ int main() {
         }
 
         if (!hasOsPacket && !hasUsbPacket && sleepUs > 0) {
+            g_DebugStage = 6;
             std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
+        }
+        if (debugLoop) {
+            std::cout << "[LOOP] done" << std::endl;
+            debugLoopCount++;
         }
     }
 
     adapter->Shutdown();
     hardware->Disconnect();
     ipcServer->StopListening();
+    if (watchdog.joinable()) watchdog.join();
     return 0;
 }

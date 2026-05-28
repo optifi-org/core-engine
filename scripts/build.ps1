@@ -1,5 +1,7 @@
 # Unified Build & Auto-Dependency Script for Windows
 
+$ErrorActionPreference = "Stop"
+
 # 0. Prerequisite Check
 if (-not (Get-Command "cmake" -ErrorAction SilentlyContinue)) {
     Write-Error "CRITICAL: 'cmake' not found! Please install CMake and add it to your PATH."
@@ -11,10 +13,12 @@ if (-not (Get-Command "cmake" -ErrorAction SilentlyContinue)) {
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location "$scriptPath\.."
 
-# 2. HARD RESET: If any CMake artifacts exist, delete the entire build folder content.
+# 2. Reset CMake artifacts while preserving downloaded runtime dependencies.
 if ((Test-Path "build\CMakeCache.txt") -or (Test-Path "build\CMakeFiles")) {
     Write-Host "[CLEAN] Hard resetting build directory to purge cross-platform artifacts..." -ForegroundColor Yellow
-    Remove-Item -Path "build\*" -Recurse -Force
+    Get-ChildItem -Path "build" -Force |
+        Where-Object { $_.Extension -ne ".dll" } |
+        Remove-Item -Recurse -Force
 }
 
 # 3. Create/Ensure build directory exists
@@ -31,6 +35,7 @@ if (-not (Test-Path "wintun.dll")) {
     Expand-Archive -Path "wintun.zip" -DestinationPath "temp_wintun" -Force
     Move-Item -Path "temp_wintun\wintun\bin\amd64\wintun.dll" -Destination "." -Force
     Remove-Item -Path "wintun.zip", "temp_wintun" -Recurse -Force
+    Write-Host "  -> Deployed wintun.dll" -ForegroundColor Gray
 }
 
 # 5. Generate Build Files

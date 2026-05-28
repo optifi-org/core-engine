@@ -9,6 +9,9 @@
 #include <atomic>
 #include <thread>
 #include <memory>
+#include <cstdlib>
+#include <mutex>
+#include <cstring>
 
 // Wintun API Signatures
 typedef void* WINTUN_ADAPTER_HANDLE;
@@ -19,12 +22,43 @@ typedef WINTUN_SESSION_HANDLE (*WintunStartSession_t)(WINTUN_ADAPTER_HANDLE, DWO
 typedef void (*WintunEndSession_t)(WINTUN_SESSION_HANDLE);
 typedef HANDLE (*WintunGetReadWaitEvent_t)(WINTUN_SESSION_HANDLE);
 typedef BYTE* (*WintunReceivePacket_t)(WINTUN_SESSION_HANDLE, DWORD*);
+typedef DWORD (*WintunGetLastError_t)(void);
 typedef void (*WintunReleaseReceivePacket_t)(WINTUN_SESSION_HANDLE, const BYTE*);
 typedef BYTE* (*WintunAllocateSendPacket_t)(WINTUN_SESSION_HANDLE, DWORD);
 typedef void (*WintunSendPacket_t)(WINTUN_SESSION_HANDLE, const BYTE*);
 
 namespace optifi {
 namespace core {
+
+namespace {
+constexpr uint8_t HOST_MAC[6] = { 0x02, 0x00, 0x00, 0x13, 0x37, 0x00 };
+constexpr uint8_t USB_MAC[6]  = { 0x02, 0x00, 0x00, 0x13, 0x37, 0x01 };
+constexpr uint16_t ETH_TYPE_IPV4 = 0x0800;
+constexpr uint16_t ETH_TYPE_IPV6 = 0x86DD;
+
+static void WriteEthType(uint8_t* frame, uint16_t type) {
+    frame[12] = static_cast<uint8_t>(type >> 8);
+    frame[13] = static_cast<uint8_t>(type & 0xFF);
+}
+
+static uint16_t ReadEthType(const uint8_t* frame) {
+    return (static_cast<uint16_t>(frame[12]) << 8) | frame[13];
+}
+}
+
+static bool RunSystemCommand(const std::string& command) {
+    std::cout << "[PAL] " << command << std::endl;
+    int code = std::system(command.c_str());
+    if (code != 0) {
+        std::cerr << "[PAL] Command failed with exit code " << code << ": " << command << std::endl;
+        return false;
+    }
+    return true;
+}
+
+static bool RunPowerShellCommand(const std::string& script) {
+    return RunSystemCommand("powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"" + script + "\"");
+}
 
 // --- PLATFORM UTILS ---
 std::function<void()> g_WinShutdownCallback;
@@ -49,7 +83,7 @@ PlatformConfig PlatformUtils::GetDefaultConfig() {
 class WindowsAdapter : public IAdapter {
 public:
     WindowsAdapter(const std::string& name) 
-        : m_name(std::wstring(name.begin(), name.end())), m_lib(nullptr), m_adapter(nullptr), m_session(nullptr) {}
+        : m_name(std::wstring(name.begin(), name.end())), m_lib(nullptr), m_adapter(nullptr), m_session(nullptr), m_waitEvent(nullptr) {}
     
     ~WindowsAdapter() { Shutdown(); }
 
@@ -73,6 +107,8 @@ public:
             std::cerr << "Are you running as Administrator?" << std::endl;
             return false;
         }
+
+        ConfigureNetwork();
         return true;
     }
 
@@ -81,6 +117,8 @@ public:
         auto getEvent = (WintunGetReadWaitEvent_t)GetProcAddress(m_lib, "WintunGetReadWaitEvent");
         m_session = start(m_adapter, bufferSize);
         if (m_session) m_waitEvent = getEvent(m_session);
+        std::cout << "[ADAPTER] Wintun session " << (m_session ? "started" : "failed")
+                  << ". waitEvent=" << m_waitEvent << std::endl;
         return m_session != nullptr;
     }
 
@@ -92,29 +130,96 @@ public:
 
     uint8_t* ReadPacket(uint32_t* outSize) override {
         auto recv = (WintunReceivePacket_t)GetProcAddress(m_lib, "WintunReceivePacket");
-        BYTE* packet = recv(m_session, (DWORD*)outSize);
-        if (!packet) WaitForSingleObject(m_waitEvent, 100);
-        return packet;
+        DWORD wintunSize = 0;
+        BYTE* packet = recv(m_session, &wintunSize);
+        if (!packet || wintunSize == 0) {
+            *outSize = 0;
+            if (packet) ReleaseWintunPacket(packet);
+            return nullptr;
+        }
+
+        uint8_t version = packet[0] >> 4;
+        uint16_t ethType = 0;
+        if (version == 4) ethType = ETH_TYPE_IPV4;
+        else if (version == 6) ethType = ETH_TYPE_IPV6;
+        else {
+            ReleaseWintunPacket(packet);
+            *outSize = 0;
+            return nullptr;
+        }
+
+        if (wintunSize + 14 > m_rxFrame.size()) {
+            m_rxFrame.resize(wintunSize + 14);
+        }
+
+        memcpy(m_rxFrame.data(), USB_MAC, sizeof(USB_MAC));
+        memcpy(m_rxFrame.data() + 6, HOST_MAC, sizeof(HOST_MAC));
+        WriteEthType(m_rxFrame.data(), ethType);
+        memcpy(m_rxFrame.data() + 14, packet, wintunSize);
+        *outSize = wintunSize + 14;
+        ReleaseWintunPacket(packet);
+        return m_rxFrame.data();
     }
 
     void ReleasePacket(const uint8_t* packet) override {
-        ((WintunReleaseReceivePacket_t)GetProcAddress(m_lib, "WintunReleaseReceivePacket"))(m_session, packet);
+        (void)packet;
     }
 
     bool SendPacket(const uint8_t* data, uint32_t size) override {
         auto alloc = (WintunAllocateSendPacket_t)GetProcAddress(m_lib, "WintunAllocateSendPacket");
         auto send = (WintunSendPacket_t)GetProcAddress(m_lib, "WintunSendPacket");
-        BYTE* buf = alloc(m_session, size);
-        if (buf) { memcpy(buf, data, size); send(m_session, buf); return true; }
+        const uint8_t* payload = data;
+        uint32_t payloadSize = size;
+
+        if (size >= 14) {
+            uint16_t ethType = ReadEthType(data);
+            if (ethType == ETH_TYPE_IPV4 || ethType == ETH_TYPE_IPV6) {
+                payload = data + 14;
+                payloadSize = size - 14;
+            }
+        }
+
+        if (payloadSize == 0) return false;
+
+        BYTE* buf = alloc(m_session, payloadSize);
+        if (buf) { memcpy(buf, payload, payloadSize); send(m_session, buf); return true; }
         return false;
     }
 
 private:
+    void ReleaseWintunPacket(const BYTE* packet) {
+        auto release = (WintunReleaseReceivePacket_t)GetProcAddress(m_lib, "WintunReleaseReceivePacket");
+        if (release && packet) release(m_session, packet);
+    }
+
+    void ConfigureNetwork() {
+        std::cout << "[ADAPTER] Configuring Wintun adapter (IP=10.137.137.1/24, GW=10.137.137.2)..." << std::endl;
+
+        const std::string adapterSelector =
+            "$a=Get-NetAdapter | Where-Object { $_.InterfaceDescription -like 'OptiFi Tunnel*' -or $_.Name -like 'OptiFi*' } | Sort-Object ifIndex -Descending | Select-Object -First 1; "
+            "if (-not $a) { Write-Error 'OptiFi Wintun adapter not found'; exit 1 }; ";
+
+        RunPowerShellCommand(adapterSelector +
+            "Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue; "
+            "New-NetIPAddress -InterfaceIndex $a.ifIndex -IPAddress 10.137.137.1 -PrefixLength 24 -DefaultGateway 10.137.137.2 -ErrorAction Stop | Out-Null; "
+            "Set-NetIPInterface -InterfaceIndex $a.ifIndex -AutomaticMetric Disabled -InterfaceMetric 1 -ErrorAction Stop; "
+            "Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ServerAddresses 1.1.1.1,8.8.8.8 -ErrorAction SilentlyContinue; "
+            "Get-NetRoute -InterfaceIndex $a.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue; "
+            "New-NetRoute -InterfaceIndex $a.ifIndex -DestinationPrefix '0.0.0.0/0' -NextHop 10.137.137.2 -RouteMetric 1 -ErrorAction Stop | Out-Null; "
+            "Write-Host ('Configured ' + $a.Name + ' / ifIndex=' + $a.ifIndex)");
+
+        // Keep a known diagnostic route available even if Windows deprioritizes the default route.
+        RunPowerShellCommand(
+            "Get-NetRoute -DestinationPrefix '8.8.8.8/32' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue; "
+            "New-NetRoute -DestinationPrefix '8.8.8.8/32' -NextHop 10.137.137.2 -InterfaceAlias (Get-NetAdapter | Where-Object { $_.InterfaceDescription -like 'OptiFi Tunnel*' -or $_.Name -like 'OptiFi*' } | Sort-Object ifIndex -Descending | Select-Object -First 1).Name -RouteMetric 1 -ErrorAction SilentlyContinue | Out-Null");
+    }
+
     std::wstring m_name;
     HMODULE m_lib;
     WINTUN_ADAPTER_HANDLE m_adapter;
     WINTUN_SESSION_HANDLE m_session;
     HANDLE m_waitEvent;
+    std::vector<uint8_t> m_rxFrame{std::vector<uint8_t>(4096)};
 };
 
 // --- WINDOWS IPC SERVER ---
@@ -129,17 +234,32 @@ public:
             while (m_running) {
                 m_pipe = CreateNamedPipeA(m_path.c_str(), PIPE_ACCESS_DUPLEX, PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT, 1, 1024, 1024, 0, NULL);
                 if (ConnectNamedPipe(m_pipe, NULL) || GetLastError() == ERROR_PIPE_CONNECTED) {
+                    std::cout << "[IPC] Frontend CONNECTED." << std::endl;
                     char buf[128];
-                    DWORD read;
                     while (m_running) {
+                        DWORD available = 0;
+                        if (!PeekNamedPipe(m_pipe, NULL, 0, NULL, &available, NULL)) {
+                            break;
+                        }
+
+                        if (available == 0) {
+                            Sleep(10);
+                            continue;
+                        }
+
+                        DWORD read = 0;
                         if (ReadFile(m_pipe, buf, sizeof(buf)-1, &read, NULL) && read > 0) {
                             buf[read] = 0;
                             std::string cmd(buf);
                             if (cmd.find("SET_BATTERY") != std::string::npos) m_preset = DriverPreset::BATTERY;
                             else if (cmd.find("SET_PERFORMANCE") != std::string::npos) m_preset = DriverPreset::PERFORMANCE;
                             else if (cmd.find("SET_BALANCED") != std::string::npos) m_preset = DriverPreset::BALANCED;
-                        } else break;
+                            else if (cmd.find("SCAN_WIFI") != std::string::npos) m_pendingScan = true;
+                        } else {
+                            break;
+                        }
                     }
+                    std::cout << "[IPC] Frontend DISCONNECTED." << std::endl;
                 }
                 CloseHandle(m_pipe);
                 m_pipe = INVALID_HANDLE_VALUE;
@@ -149,10 +269,20 @@ public:
     }
     void StopListening() override { m_running = false; if (m_pipe != INVALID_HANDLE_VALUE) CloseHandle(m_pipe); if (m_thread.joinable()) m_thread.join(); }
     DriverPreset GetCurrentPreset() const override { return m_preset.load(); }
+    bool HasPendingScan() override { return m_pendingScan.load(); }
+    void ClearPendingScan() override { m_pendingScan = false; }
     bool BroadcastTelemetry(uint64_t cpu, size_t sz) override {
         if (m_pipe == INVALID_HANDLE_VALUE) return false;
         std::string p = "TELEMETRY|" + std::to_string(sz) + "|" + std::to_string(cpu) + "\n";
         DWORD written;
+        std::lock_guard<std::mutex> lock(m_writeMutex);
+        return WriteFile(m_pipe, p.c_str(), (DWORD)p.length(), &written, NULL);
+    }
+    bool BroadcastMessage(const std::string& msg) override {
+        if (m_pipe == INVALID_HANDLE_VALUE) return false;
+        std::string p = "MSG|" + msg + "\n";
+        DWORD written;
+        std::lock_guard<std::mutex> lock(m_writeMutex);
         return WriteFile(m_pipe, p.c_str(), (DWORD)p.length(), &written, NULL);
     }
 private:
@@ -160,7 +290,9 @@ private:
     HANDLE m_pipe;
     std::atomic<bool> m_running;
     std::thread m_thread;
+    std::mutex m_writeMutex;
     std::atomic<DriverPreset> m_preset{DriverPreset::BALANCED};
+    std::atomic<bool> m_pendingScan{false};
 };
 
 // --- FACTORIES ---
@@ -177,6 +309,7 @@ std::unique_ptr<IHardware> CreateHardware() {
         bool Initialize() override { return true; }
         void SendPacket(const uint8_t*, uint32_t) override {}
         int ReadPacket(uint8_t*, uint32_t) override { return 0; }
+        bool IsConnected() const override { return true; }
         void Disconnect() override {}
     };
     return std::make_unique<MockHardware>(); 
