@@ -1,3 +1,0 @@
-/c/Users/aryan/Documents/optifi-firmware/core-engine/build-win-verify/CMakeFiles/optifi-core-engine.dir
-/c/Users/aryan/Documents/optifi-firmware/core-engine/build-win-verify/CMakeFiles/edit_cache.dir
-/c/Users/aryan/Documents/optifi-firmware/core-engine/build-win-verify/CMakeFiles/rebuild_cache.dir
